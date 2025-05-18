@@ -370,5 +370,5 @@ if __name__ == '__main__':
     variables = ['salinity','water_temp','surf_el','water_u','water_v']
     domain = [23,24,-37,-36]
     depths = [0,5]
-    save_dir = '/home/g.rautenbach/Projects/somisana-croco/DATASETS_CROCOTOOLS/HYCOM/'
+    save_dir = '/home/g.rautenbach/Projects/somisana-download/DATASETS_CROCOTOOLS/HYCOM/'
     download_hycom(variables, domain, depths, run_date, hdays, fdays, save_dir, pad=True)

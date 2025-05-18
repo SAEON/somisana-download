@@ -46,7 +46,7 @@ def parse_bool(s: str) -> bool:
 
 def main():
     
-    parser = argparse.ArgumentParser(description='Command-line interface for selected functions in the somisana-croco repo')
+    parser = argparse.ArgumentParser(description='Command-line interface for selected functions in the somisana-download repo')
     subparsers = parser.add_subparsers(dest='function', help='Select the function to run')
 
     # just keep adding new subparsers for each new function as we go...

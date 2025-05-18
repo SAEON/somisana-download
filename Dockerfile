@@ -18,10 +18,10 @@ ENV DEBIAN_FRONTEND noninteractive
 RUN mkdir /somisana-download
 WORKDIR /somisana-download
 
-# Install somisana-croco environment into base conda environment
+# Install somisana-download environment into base conda environment
 COPY environment.yml .
 RUN mamba env update -n base -f environment.yml
 
-# add the somisana-croco code and install into the base environment
-ADD . /somisana-croco
+# add the somisana-download code and install into the base environment
+ADD . /somisana-download
 RUN pip install -e .
