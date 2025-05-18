@@ -1,0 +1,69 @@
+name: build and push docker image
+
+on:
+  push:
+  workflow_dispatch:  # Allows the workflow to be triggered manually
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # Set the cli image name using the current branch reference
+  envs:
+    runs-on: ubuntu-latest
+    outputs:
+      BRANCH_REF: ${{ steps.BRANCH_REF.outputs.value }}
+      IMAGE_NAME: ${{ steps.IMAGE_NAME.outputs.value }}
+    steps:
+      # Dynamically set the branch ref to the currently executing branch
+      - name: Set the BRANCH_REF
+        id: BRANCH_REF
+        run: |
+          echo "value=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+      - name: Set image name
+        id: IMAGE_NAME
+        run: |
+          echo "value=${{ env.REGISTRY }}/saeon/somisana-download_${{ steps.BRANCH_REF.outputs.value }}" >> $GITHUB_OUTPUT
+
+  build-and-push-image:
+    needs: [envs]
+    runs-on: ubuntu-latest
+    env:
+      BRANCH_REF: ${{ needs.envs.outputs.BRANCH_REF }}
+      IMAGE_NAME: ${{ needs.envs.outputs.IMAGE_NAME }}
+      SHA: sha-${{ github.sha }}
+    outputs:
+      image: ${{ env.IMAGE_NAME }}:${{ env.SHA }}
+    # Sets the permissions granted to the `GITHUB_TOKEN` for the actions in this job.
+    permissions:
+      contents: read
+      packages: write
+      # 
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@main # change to main
+        with:
+          ref: ${{ env.BRANCH_REF }}
+      - name: Log in to the Container registry
+        uses: docker/login-action@master
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@master
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            latest
+            ${{ env.SHA }}
+      - name: Build and push
+        uses: docker/build-push-action@master
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+  
