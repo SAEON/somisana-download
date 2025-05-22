@@ -80,7 +80,7 @@ def download_cmems(usrname, passwd, dataset, varlist, start_date, end_date, doma
             raise  # Re-raise the exception for potential retries
         i+=1
 
-def download_mercator(usrname, passwd, domain, run_date, hdays, fdays, outputDir):
+def download_mercator_ops(usrname, passwd, domain, run_date, hdays, fdays, outputDir):
     """
     Download the operational Mercator ocean output
     """
@@ -185,15 +185,9 @@ def download_cmems_monthly(usrname,
         downloadDate=downloadDate+timedelta(days=32) # 32 days ensures we get to the next month
         downloadDate=datetime(downloadDate.year, downloadDate.month, 1) # set the first day of the month
 
-#TODO I think we should create a download_cmems_ops function which works in a similar
-# way to download_mercator (with the hdays and fdays option) but is generic for any cmems dataset
-# A lot of the code in download_mercator can be moved to the cli function, which would call the 
-# generic download_cmems_ops function
-
 if __name__ == "__main__":
     
     # Mercator glorys product
-    #:wq
     # your CMEMS username and password
     usrname = 'gfearon'
     passwd = 'Isabella_2015'

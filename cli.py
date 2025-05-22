@@ -10,7 +10,7 @@ Feel free to add more functions from the repo as we need them in the cli
 import argparse
 import sys, os
 from datetime import datetime, timedelta
-from download_tools.cmems import download_cmems_monthly, download_mercator
+from download_tools.cmems import download_cmems, download_cmems_monthly, download_mercator_ops
 from download_tools.gfs import download_gfs_atm
 from download_tools.hycom import download_hycom
 
@@ -77,28 +77,60 @@ def main():
         download_cmems_monthly(args.usrname, args.passwd, args.dataset, args.domain, args.start_date,args.end_date,args.varList, args.depths, args.outputDir)
     parser_download_cmems_monthly.set_defaults(func=download_cmems_monthly_handler)
 
-    # -------------------
-    # download_mercator
-    # -------------------
-    parser_download_mercator = subparsers.add_parser('download_mercator', 
-            help='Download a subset of daily MERCATOR 1/12 deg analysis and forecast data from CMEMS')
-    parser_download_mercator.add_argument('--usrname', required=True, type=str, help='Copernicus username')
-    parser_download_mercator.add_argument('--passwd', required=True, help='Copernicus password')
-    parser_download_mercator.add_argument('--domain', type=parse_list, 
+    # ----------------------
+    # download_cmems_ops
+    # ----------------------
+    parser_download_cmems_ops = subparsers.add_parser('download_cmems_ops', 
+            help='Download a subset of operational data from CMEMS')
+    parser_download_cmems_ops.add_argument('--usrname', required=True, type=str, help='Copernicus username')
+    parser_download_cmems_ops.add_argument('--passwd', required=True, help='Copernicus password')
+    parser_download_cmems_ops.add_argument('--dataset', required=True, help='Copernicus dataset ID')
+    parser_download_cmems_ops.add_argument('--varList', required=True, type=parse_list_str, 
+                        help='comma separated list of variables to download e.g. "so,thetao,zos,uo,vo"')
+    parser_download_cmems_ops.add_argument('--domain', type=parse_list, 
                         default=[10, 25, -40, -25],
                         help='comma separated list of domain extent to download i.e. "lon0,lon1,lat0,lat1"')
-    parser_download_mercator.add_argument('--run_date', required=True, type=parse_datetime, 
-                        help='start time in format "YYYY-MM-DD HH:MM:SS"')
-    parser_download_mercator.add_argument('--hdays', required=True, type=float,
+    parser_download_cmems_ops.add_argument('--depths', type=parse_list, 
+                        default=[0.493, 5727.918],
+                        help='comma separated list of depth extent to download (positive down). For all depths use "0.493,5727.918"')
+    parser_download_cmems_ops.add_argument('--run_date', required=True, type=parse_datetime, 
+                        help='current time in format "YYYY-MM-DD HH:MM:SS"')
+    parser_download_cmems_ops.add_argument('--hdays', required=True, type=float,
                         default=5.,
                         help='hindcast days i.e before run_date')
-    parser_download_mercator.add_argument('--fdays', required=True, type=float,
+    parser_download_cmems_ops.add_argument('--fdays', required=True, type=float,
                         default=5.,
                         help='forecast days i.e before run_date')
-    parser_download_mercator.add_argument('--outputDir', required=True, help='Directory to save files') 
-    def download_mercator_handler(args):
-        download_mercator(args.usrname, args.passwd, args.domain, args.run_date,args.hdays, args.fdays,args.outputDir)
-    parser_download_mercator.set_defaults(func=download_mercator_handler)
+    parser_download_cmems_ops.add_argument('--outputDir', required=True, help='Directory to save file') 
+    parser_download_cmems_ops.add_argument('--outputFile', required=True, help='Output file name') 
+    def download_cmems_ops_handler(args):
+        start_date = run_date + timedelta(days=-args.hdays)
+        end_date = run_date + timedelta(days=args.fdays)
+        download_cmems(args.usrname, args.passwd, args.dataset, args.varlist, start_date, end_date, args.domain, args.depths, args.outputDir, args.outputFile)
+    parser_download_cmems_ops.set_defaults(func=download_cmems_ops_handler)
+
+    # ----------------------
+    # download_mercator_ops
+    # ----------------------
+    parser_download_mercator_ops = subparsers.add_parser('download_mercator_ops', 
+            help='Download a subset of daily MERCATOR 1/12 deg analysis and forecast data from CMEMS')
+    parser_download_mercator_ops.add_argument('--usrname', required=True, type=str, help='Copernicus username')
+    parser_download_mercator_ops.add_argument('--passwd', required=True, help='Copernicus password')
+    parser_download_mercator_ops.add_argument('--domain', type=parse_list, 
+                        default=[10, 25, -40, -25],
+                        help='comma separated list of domain extent to download i.e. "lon0,lon1,lat0,lat1"')
+    parser_download_mercator_ops.add_argument('--run_date', required=True, type=parse_datetime, 
+                        help='start time in format "YYYY-MM-DD HH:MM:SS"')
+    parser_download_mercator_ops.add_argument('--hdays', required=True, type=float,
+                        default=5.,
+                        help='hindcast days i.e before run_date')
+    parser_download_mercator_ops.add_argument('--fdays', required=True, type=float,
+                        default=5.,
+                        help='forecast days i.e before run_date')
+    parser_download_mercator_ops.add_argument('--outputDir', required=True, help='Directory to save files') 
+    def download_mercator_ops_handler(args):
+        download_mercator_ops(args.usrname, args.passwd, args.domain, args.run_date,args.hdays, args.fdays,args.outputDir)
+    parser_download_mercator_ops.set_defaults(func=download_mercator_ops_handler)
     
     # ------------------
     # download_gfs_atm
