@@ -25,3 +25,6 @@ RUN mamba env update -n base -f environment.yml
 # add the somisana-download code and install into the base environment
 ADD . /somisana-download
 RUN pip install -e .
+
+# Set the cli.py as the entry point
+ENTRYPOINT ["python", "cli.py"]
