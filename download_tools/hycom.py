@@ -136,7 +136,7 @@ def download_hycom(dataset, var, start_date, end_date, domain, depths, outputDir
     for f in time_slices:
         f.unlink()
 
-def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel = False):
+def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True):
     """
     Downloads the HYCOM analysis variables (salinity, water_temp, surf_el, water_u and water_v) required 
     to run our forecast models. The variables are stored in daily outputs.
