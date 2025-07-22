@@ -12,7 +12,7 @@ import sys, os
 from datetime import datetime, timedelta
 from download_tools.cmems import download_cmems, download_cmems_monthly, download_mercator_ops
 from download_tools.gfs import download_gfs_atm
-from download_tools.hycom import download_hycom
+from download_tools.hycom import download_hycom_ops
 
 # functions to help parsing string input to object types needed by python functions
 def parse_datetime(value):
@@ -154,35 +154,29 @@ def main():
     parser_download_gfs_atm.set_defaults(func=download_gfs_atm_handler) 
     
     # -------------------
-    # download_hycom
+    # download_hycom_ops
     # -------------------
-    parser_download_hycom = subparsers.add_parser('download_hycom', 
-            help='Download a subset of  HYCOM analysis and forecast data using xarray OpenDAP')
-    parser_download_hycom.add_argument('--variables',required=False,
-                                       default = ['salinity', 'water_temp', 'surf_el', 'water_u', 'water_v'],
-                                       help='List of variables to download.')    
-    parser_download_hycom.add_argument('--domain', required=False, type=parse_list,
+    parser_download_hycom_ops = subparsers.add_parser('download_hycom_ops', 
+            help='Download a subset of daily HYCOM analysis and forecast data from the HYCOM THREDDS Server')
+    parser_download_hycom_ops.add_argument('--domain', required=False, type=parse_list,
                                        default=[10, 25, -40, -25],
                                        help='comma separated list of domain extent to download i.e. [lon_min,lon_max,lat_min,lat_max]')
-    parser_download_hycom.add_argument('--depths', required=False, type=parse_list,
-                                       default=[0,5000],
-                                       help='Minimum and maximum depths to download. Values must be positive. Default is [0,5000]')
-    parser_download_hycom.add_argument('--run_date', required=True, type=parse_datetime,
+    parser_download_hycom_ops.add_argument('--run_date', required=True, type=parse_datetime,
                                        help='start time in datetime format "YYYY-MM-DD HH:MM:SS"')
-    parser_download_hycom.add_argument('--hdays', required=False, type=float,
+    parser_download_hycom_ops.add_argument('--hdays', required=False, type=float,
                                        default=5.,
                                        help='hindcast days i.e before run_date')
-    parser_download_hycom.add_argument('--fdays', required=False, type=float, 
+    parser_download_hycom_ops.add_argument('--fdays', required=False, type=float, 
                                        default=5.,
                                        help='forecast days i.e before run_date')
-    parser_download_hycom.add_argument('--savedir', required=True, 
+    parser_download_hycom_ops.add_argument('--outputDir', required=True, 
                                        help='Directory to save files')
-    parser_download_hycom.add_argument('--pad',required=False, type=parse_bool,
-                                       default=False,
-                                       help='Pad all time-dependent variables in the dataset by one timestep at the start and end. At the start, we download and extra day and at the end we copy the last timestep (Default is False). This is used operationally for our forecast models.')
-    def download_hycom_handler(args):
-        download_hycom(args.variables,args.domain, args.depths, args.run_date, args.hdays, args.fdays, args.savedir, args.pad)
-    parser_download_hycom.set_defaults(func=download_hycom_handler)
+    parser_download_hycom_ops.add_argument('--parallel',required=False, type=parse_bool,
+                                       default=True,
+                                       help='Download routine used: False = serial download, True = parallel download.')
+    def download_hycom_ops_handler(args):
+        download_hycom_ops(args.domain, args.run_date, args.hdays, args.fdays, args.outputDir, args.parallel)
+    parser_download_hycom_ops.set_defaults(func=download_hycom_ops_handler)
     
     
     args = parser.parse_args()
