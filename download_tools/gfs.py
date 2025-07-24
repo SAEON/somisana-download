@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import os
 from pathlib import Path
 import urllib
+import urllib.request
 
 """
 Download GFS forecast data
