@@ -11,7 +11,7 @@
 
 # start with a mambaforge base image
 # We're fixing the mambaforge version due to dependency issues which get introduced if left open ended
-FROM condaforge/mambaforge:22.9.0-1
+FROM condaforge/mambaforge:24.1.2-0
 
 ENV DEBIAN_FRONTEND noninteractive
 
