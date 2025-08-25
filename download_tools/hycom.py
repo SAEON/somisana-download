@@ -7,8 +7,9 @@ import numpy as np
 from pathlib import Path
 import tempfile
 import threading
-import time
- 
+from glob import glob
+from time import sleep
+
 def update_var_list(var_list,run_date):
     var_metadata = {
         'salinity': {
@@ -43,11 +44,11 @@ def decode_time_units(time_var):
     try:
         units = time_var.units
         calendar = time_var.calendar
-        time = cftime.num2date(
+        times = cftime.num2date(
             time_var[:], units=units, calendar=calendar,
             only_use_cftime_datetimes=False, only_use_python_datetimes=True
             )
-        return pd.DatetimeIndex(time)      
+        return pd.DatetimeIndex(times)      
     except AttributeError as e:
         raise ValueError(f"Missing expected attributes in time_var: {e}")
     except Exception as e:
@@ -67,74 +68,77 @@ def download_hycom(dataset, var, start_date, end_date, domain, depths, outputDir
     print('')
     print(f'Downloading: {var}')
     
-    # Because of xarray (and netCDF4) lazyt way of loading files using Opendap, sometimes they 
-    # do not read in the correct times. This leads to issues when subsetting. 
-    # Therefore, we impose a loop to ensure that it does load 
-    # in the files correctly before continuing with the subsetting and downloading.
-    if 'surf_el' in var: Nt = 385 # hourly for ssh
-    else: Nt = 121                # three hourly for the rest of the components
-    i = 1
-    MAX_TRIES = 100
-    success = False
-    while i <= MAX_TRIES:
-        try:
-            ds = xr.open_dataset(
-                dataset,
-                drop_variables=vars_to_drop,
-                decode_times=False
-                ).sel(lat=lat_range, lon=lon_range)
+    # Because of xarray (and netCDF4) lazy way of loading files using Opendap, sometimes it 
+    # does not read in the times correctly, hence the lazy loading. This leads to issues when subsetting. 
+    # Therefore, we impose a loop to ensure that it does load in the files correctly before continuing 
+    # with the subsetting and downloading.
+    if 'surf_el' in var: Nt = 361 # hourly for ssh
+    else: Nt = 121                # three hourly for water_temp, salinity, water_u and water_v
+
+    if Path(outputDir, fname).exists(): print(f'\n{fname} already exist.\nDownload skipped.\n')
+    else:
+        i = 1
+        MAX_TRIES = 100
+        success = False
+        while i <= MAX_TRIES:
             try:
-                ds['time'] = decode_time_units(ds['time'])
-                print(f"[Try {i}] Decoded the times.")
-                if np.unique(ds['time']).size >= Nt:
-                    success = True
-                    break  # Exit the loop if we have the right number of time steps
-                else:
-                    print(f"[Try {i}] Incomplete time coverage.")
+                ds = xr.open_dataset(
+                    dataset,
+                    drop_variables=vars_to_drop,
+                    decode_times=False
+                    ).sel(lat=lat_range, lon=lon_range)
+                try:
+                    ds['time'] = decode_time_units(ds['time'])
+                    print(f"[Try {i}] Decoded the times.")
+                    if np.unique(ds['time']).size >= Nt:
+                        success = True
+                        break  # Exit the loop if we have the right number of time steps
+                    else:
+                        print(f"[Try {i}] Incomplete time coverage.")
+                        ds.close()
+                        i += 1
+                except Exception as e:
+                    print(f"[Try {i}] Time decoding failed: {e}")
                     ds.close()
                     i += 1
             except Exception as e:
-                print(f"[Try {i}] Time decoding failed: {e}")
-                ds.close()
+                print(f"[Try {i}] Dataset open failed: {e}")
                 i += 1
-        except Exception as e:
-            print(f"[Try {i}] Dataset open failed: {e}")
-            i += 1
-    if not success:
-        raise RuntimeError(f"Failed to open and decode the dataset correctly after {MAX_TRIES} attempts.")
-
-    variable = ds[var].sel(time=slice(start_date,end_date))
-            
-    if variable.ndim == 4: variable = variable.sel(depth=depth_range)
-
-    variable = variable.resample(time='1D').mean()
+        if not success:
+            raise RuntimeError(f"Failed to open and decode the dataset correctly after {MAX_TRIES} attempts.")
     
-    tmp_dir = Path(tempfile.mkdtemp())
-    time_slices = []
+        variable = ds[var].sel(time=slice(start_date,end_date))
+                
+        if variable.ndim == 4: variable = variable.sel(depth=depth_range)
     
-    for t in range(variable.time.values.size):
-        try:
-            # Save temporary file
-            time_str = pd.to_datetime(variable.time.values[t]).strftime("%Y-%m-%d")
-            tmp_file = tmp_dir / f"{var}_{time_str}.nc"
-            v=variable[t]
-            v.to_netcdf(tmp_file)
-            time_slices.append(tmp_file)
-        except Exception as e:
-            print(f"Failed to download time {t}: {e}")
-   
-    # Combine time slices
-    datasets = [xr.open_dataset(f) for f in time_slices]
-    combined = xr.concat(datasets, dim="time")
-    combined = combined.sortby('time')
-
-    save_path = os.path.join(outputDir, fname)
-    combined=combined.sel(time=slice(start_date, end_date))
-    combined.to_netcdf(save_path)
-
-    ds.close()
-    for f in time_slices:
-        f.unlink()
+        variable = variable.resample(time='1D').mean()
+        
+        tmp_dir = Path(tempfile.mkdtemp())
+        time_slices = []
+        
+        for t in range(variable.time.values.size):
+            try:
+                # Save temporary file
+                time_str = pd.to_datetime(variable.time.values[t]).strftime("%Y-%m-%d")
+                tmp_file = tmp_dir / f"{var}_{time_str}.nc"
+                v=variable[t]
+                v.to_netcdf(tmp_file)
+                time_slices.append(tmp_file)
+            except Exception as e:
+                print(f"Failed to download time {t}: {e}")
+       
+        # Combine time slices
+        datasets = [xr.open_dataset(f) for f in time_slices]
+        combined = xr.concat(datasets, dim="time")
+        combined = combined.sortby('time')
+    
+        save_path = os.path.join(outputDir, fname)
+        combined=combined.sel(time=slice(start_date, end_date))
+        combined.to_netcdf(save_path)
+    
+        ds.close()
+        for f in time_slices:
+            f.unlink()
 
 def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True):
     """
@@ -151,8 +155,6 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
     OUTPUT:
     NetCDF file containing the most recent HYCOM forcast run.
     """
-
-    start_time = time.time()
 
     # We add an additional day to ensure that it exceeds the model run time.    
     hdays,fdays = hdays + 1, fdays + 1
@@ -198,31 +200,38 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
             t = threading.Thread(target=download_worker, args=(var,))
             threads.append(t)
             t.start()
-            time.sleep(2)
+            sleep(2)
         # Wait for all threads to finish
         for t in threads:
             t.join()
         
-    # Combine the variables into one file
-    ds = xr.open_mfdataset(os.path.join(outputDir, 'hycom_*.nc'))
+    output_dir = Path(outputDir)  
+    files = sorted(output_dir.glob("hycom_*.nc"))
+    # We ensure that all the variables have been saved before merginf it.
+    # If there is a file missing, then the function will fail. 
+    # in our operational workflow, it will restart the download automatically. 
+    if len(files) == 5:       
+        with xr.open_mfdataset(files, combine="by_coords") as ds:
+            outfile = output_dir / f"HYCOM_{run_date.strftime('%Y%m%d_%H')}.nc"
+            
+            # Remove if exists
+            if outfile.exists(): outfile.unlink()
+            
+            ds.to_netcdf(outfile, mode="w")
+            outfile.chmod(0o775)
         
-    outfile = os.path.abspath(os.path.join(outputDir, f"HYCOM_{run_date.strftime('%Y%m%d_%H')}.nc"))
+        print("\nFiles downloaded successfully.")
+        print(f"\nCreated {outfile} successfully.\n")
     
-    if os.path.exists(outfile): os.remove(outfile)
-    
-    ds.to_netcdf(outfile, 'w')
-    os.chmod(outfile, 0o775)
-
-    print(f'\nCreated {outfile} successfully.')
-    print(f'\nFiles downloaded in {timedelta( seconds = time.time() - start_time )} [hh:mm:ss].')
-    print('')
+    else:
+        raise RuntimeError(f"Expected 5 files, found {len(files)} — download/s may have failed.")
 
 if __name__ == '__main__':
-    run_date = pd.to_datetime('2025-07-18 00:00:00')
+    run_date = pd.to_datetime('2025-08-22 00:00:00')
     hdays = 0
     fdays = 0
-    domain = [11,36,-39,-25]
-    domain = [11,32,-39,-38]
+    #domain = [11,36,-39,-25]
+    domain = [11,12,-39,-38]
     outputDir = '/home/g.rautenbach/Projects/somisana-croco/DATASETS_CROCOTOOLS/HYCOM/'
     parallel = True
     download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel)
