@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import urllib
 import urllib.request
+from urllib.error import HTTPError, URLError
 
 """
 Download GFS forecast data
@@ -69,12 +70,15 @@ def get_latest_available_dt(dt):
     latest_available_date = datetime(dt.year, dt.month, dt.day, 18, 0, 0)
     gfs_exists = False
     iters = 0
-    
+
     def check_file_exists(url):
+        test_url = url + ".dds"  # probe the .dds endpoint
         try:
-            response = urllib.request.urlopen(url)  # Attempt to open the URL
-            return response.status == 200         # Check for HTTP 200 OK 
-        except Exception:  # Catch potential network-related errors
+            req = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req) as resp:
+                return resp.status == 200
+        except (HTTPError, URLError) as e:
+            #print(f"Failed at {test_url}: {e}")
             return False
 
     while not (gfs_exists):
@@ -91,20 +95,17 @@ def get_latest_available_dt(dt):
         )
 
         print("Testing GFS availability", dataset_url)
-        response = urllib.request.urlopen(dataset_url)
-        data = response.read().decode('utf-8')  # Read the response data
-        if "is not an available service" in data: 
+        gfs_exists = check_file_exists(dataset_url)
+        if not gfs_exists: 
             latest_available_date = latest_available_date + timedelta(hours=-6)
             iters += 1
         else:
-            # Assume valid if error message is not found
             print(
                 "Latest available GFS initialisation found at",
                 dataset_url,
                 "\n",
                 "\n",
             )
-            gfs_exists = True
 
     return latest_available_date
 
