@@ -66,43 +66,55 @@ def download_file(fname, outputDir, encoded_params):
     else:
         print("File already exists", fileout)
 
+def check_gfs_availability(dt):
+    """
+    Check if a GFS .idx file exists for a given datetime
+    """
+    fhr_str = "000"
+    idx_url = (
+        "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/gfs."
+        + dt.strftime("%Y%m%d")
+        + "/"
+        + dt.strftime("%H")
+        + "/atmos/gfs.t"
+        + dt.strftime("%H")
+        + "z.pgrb2.0p25.f"
+        + fhr_str
+        + ".idx"
+    )
+
+    try:
+        req = urllib.request.Request(idx_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as resp:
+            content = resp.read().decode("utf-8")
+            if len(content.strip()) > 0:
+                return True
+            else:
+                #print(f".idx file empty at {idx_url}")
+                return False
+    except (HTTPError, URLError) as e:
+        #print(f"Failed to access .idx file at {idx_url}: {e}")
+        return False
+
 def get_latest_available_dt(dt):
     latest_available_date = datetime(dt.year, dt.month, dt.day, 18, 0, 0)
     gfs_exists = False
     iters = 0
-
-    def check_file_exists(url):
-        test_url = url + ".dds"  # probe the .dds endpoint
-        try:
-            req = urllib.request.Request(test_url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req) as resp:
-                return resp.status == 200
-        except (HTTPError, URLError) as e:
-            #print(f"Failed at {test_url}: {e}")
-            return False
 
     while not (gfs_exists):
         if iters > 4:
             print("GFS data is not presently available")
             exit(1)
 
-        dataset_url = (
-            "https://nomads.ncep.noaa.gov/dods/gfs_0p25/gfs"
-            + latest_available_date.strftime("%Y%m%d")
-            + "/gfs_0p25_"
-            + latest_available_date.strftime("%H")
-            + "z"
-        )
-
-        print("Testing GFS availability", dataset_url)
-        gfs_exists = check_file_exists(dataset_url)
+        print("Testing GFS availability: ", latest_available_date.strftime("%Y%m%d_%H"))
+        gfs_exists = check_gfs_availability(latest_available_date)
         if not gfs_exists: 
             latest_available_date = latest_available_date + timedelta(hours=-6)
             iters += 1
         else:
             print(
-                "Latest available GFS initialisation found at",
-                dataset_url,
+                    "GFS data available for: ",
+                latest_available_date.strftime("%Y%m%d_%H"),
                 "\n",
                 "\n",
             )
