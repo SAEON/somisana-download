@@ -10,6 +10,47 @@ import threading
 from glob import glob
 from time import sleep
 
+def has_valid_time_range(file_path, expected_timesteps=None, time_var="time"):
+    """
+    Check whether a NetCDF file has a valid time range.
+
+    Parameters
+    ----------
+    file_path : str
+        Path to the NetCDF file.
+    expected_timesteps : int, optional
+        Expected number of time steps. If None, only checks that time exists.
+    time_var : str, optional
+        Name of the time variable (default is "time").
+
+    Returns
+    -------
+    bool
+        True if valid, False otherwise.
+    str
+        Message describing the issue if invalid.
+    """
+    try:
+        with xr.open_dataset(file_path) as ds:
+            # Check if time variable exists
+            if time_var not in ds.variables:
+                return False, f"Time variable '{time_var}' not found."
+
+            time = ds[time_var]
+
+            # Check number of timesteps
+            n_time = time.size
+            if expected_timesteps is not None and n_time != expected_timesteps:
+                return False, f"Expected {expected_timesteps} timesteps, found {n_time}."
+
+            # Optionally check monotonicity (time should be increasing)
+            if not (time.values[1:] > time.values[:-1]).all():
+                return False, "Time values are not strictly increasing."
+
+            return True, "Valid time range."
+    except Exception as e:
+        return False, f"Error opening file: {e}"
+
 def update_var_list(var_list,run_date):
     var_metadata = {
         'salinity': {
@@ -165,74 +206,107 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
     # we are intersted in downloading
     VARIABLES = update_var_list(['salinity', 'water_temp', 'surf_el', 'water_u', 'water_v'],
                                 run_date)
-    
+
+
     # Define depth to download
     depths=[0,5000]
     
-    # Downloading in series
-    if not parallel:
-        for var in VARIABLES:
-            download_hycom(VARIABLES[var]["dataset"], 
-                           VARIABLES[var]["var_id"], 
-                           start_date, 
-                           end_date, 
-                           domain, 
-                           depths, 
-                           outputDir, 
-                           VARIABLES[var]["fname"]
-                           )
+    # Changing the path format for more elegant syntax
+    output_dir = Path(outputDir)
     
-    # Downloading in parallel
-    else:
+    # --- Step 1: Check existing files and remove broken ones ---
+    # Allows us to also avoid having to redownload files that may have 
+    # already been downloaded successfully 
+    missing_vars = []
+    for var in VARIABLES:
+        fname = output_dir / VARIABLES[var]["fname"]
+        if fname.exists():
+            valid, msg = has_valid_time_range(fname, 1 + hdays + fdays, "time")
+            print(f"\nChecking: {fname} -> {valid}, {msg}")
+            if not valid:
+                fname.unlink()
+                print(f"{fname.name} was removed (invalid time range).")
+                missing_vars.append(var)
+        else:
+            missing_vars.append(var)
+            
+   # --- Step 2: Download only missing files ---
+    if missing_vars:
+        print(f"\nNeed to download {len(missing_vars)} file(s): {missing_vars}\n")
+
         def download_worker(var):
-            download_hycom(VARIABLES[var]["dataset"], 
-                           VARIABLES[var]["var_id"], 
-                           start_date, 
-                           end_date, 
-                           domain, 
-                           depths, 
-                           outputDir, 
-                           VARIABLES[var]["fname"]
-                           )
-        threads = []
+            download_hycom(
+                VARIABLES[var]["dataset"],
+                VARIABLES[var]["var_id"],
+                start_date,
+                end_date,
+                domain,
+                depths,
+                output_dir,
+                VARIABLES[var]["fname"],
+            )
+
+        if parallel:
+            threads = []
+            for var in missing_vars:
+                t = threading.Thread(target=download_worker, args=(var,))
+                threads.append(t)
+                t.start()
+                sleep(2)
+            for t in threads:
+                t.join()
+        else:
+            for var in missing_vars:
+                download_worker(var)
+
+    # --- Step 3: Post-check all files (including just-downloaded ones) ---
+    # This avoids potential "bad downloads" that seems to happen quite often with HYCOM
     
-        for var in VARIABLES:
-            t = threading.Thread(target=download_worker, args=(var,))
-            threads.append(t)
-            t.start()
-            sleep(2)
-        # Wait for all threads to finish
-        for t in threads:
-            t.join()
-        
-    output_dir = Path(outputDir)  
-    files = sorted(output_dir.glob("hycom_*.nc"))
-    # We ensure that all the variables have been saved before merginf it.
-    # If there is a file missing, then the function will fail. 
-    # in our operational workflow, it will restart the download automatically. 
-    if len(files) == 5:       
+    bad_files = []
+    for var in VARIABLES:
+        fname = output_dir / VARIABLES[var]["fname"]
+        if fname.exists():
+            valid, msg = has_valid_time_range(fname, 1 + hdays + fdays, "time")
+            print(f"\nFinal check: {fname} -> {valid}, {msg}")
+            if not valid:
+                fname.unlink()
+                bad_files.append(fname.name)
+        else:
+            bad_files.append(fname.name)
+
+    if bad_files:
+        raise RuntimeError(
+            f"Some files are still invalid after download: {bad_files}. "
+            "They were removed and must be retried by the workflow."
+        )
+
+    # --- Step 4: Merge only if all files exist and they have the correct time range ---
+    files = [output_dir / VARIABLES[var]["fname"] for var in VARIABLES]
+    if all(f.exists() for f in files):
         with xr.open_mfdataset(files, combine="by_coords") as ds:
             outfile = output_dir / f"HYCOM_{run_date.strftime('%Y%m%d_%H')}.nc"
-            
-            # Remove if exists
-            if outfile.exists(): outfile.unlink()
-            
+
+            if outfile.exists():
+                outfile.unlink()
+
             ds.to_netcdf(outfile, mode="w")
             outfile.chmod(0o775)
-        
+
         print("\nFiles downloaded successfully.")
         print(f"\nCreated {outfile} successfully.\n")
-    
-    else:
-        raise RuntimeError(f"Expected 5 files, found {len(files)} — download/s may have failed.")
 
+    else:
+        missing = [f.name for f in files if not f.exists()]
+        raise RuntimeError(
+            f"Missing files after download attempt: {missing} — will need to retry."
+        )
+        
 if __name__ == '__main__':
-    run_date = pd.to_datetime('2025-08-22 00:00:00')
-    hdays = 0
-    fdays = 0
+    run_date = pd.to_datetime('2025-09-17 00:00:00')
+    hdays = 1
+    fdays = 1
     #domain = [11,36,-39,-25]
     domain = [11,12,-39,-38]
     outputDir = '/home/g.rautenbach/Projects/somisana-croco/DATASETS_CROCOTOOLS/HYCOM/'
     parallel = True
     download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel)
-      
