@@ -7,8 +7,41 @@ import numpy as np
 from pathlib import Path
 import tempfile
 import threading
-from glob import glob
 from time import sleep
+
+def pad_time_step_file(fname: Path) -> None:
+    """
+    Pad all time-dependent variables in a NetCDF file by one timestep at the end,
+    duplicating the last time step's data and inferring the time delta.
+    Overwrites the file in place.
+    """
+    with xr.open_dataset(fname) as ds:
+        time = ds['time']
+        last_time = pd.to_datetime(time[-1].values)
+        time_diff = pd.to_timedelta(time.diff('time').mean().values)
+        padded_time = np.datetime64(last_time + time_diff, 'ns')
+        new_time = np.append(time.values, padded_time)
+
+        padded_vars = {}
+        for var_name, da in ds.data_vars.items():
+            if 'time' in da.dims:
+                new_slice = da.isel(time=-1).expand_dims(time=[padded_time])
+                new_slice[:] = da.isel(time=-1)
+                da_padded = xr.concat([da, new_slice], dim='time')
+                da_padded = da_padded.assign_coords(time=('time', new_time))
+                padded_vars[var_name] = da_padded
+            else:
+                padded_vars[var_name] = da
+
+        ds_padded = xr.Dataset(
+            padded_vars,
+            coords={k: v for k, v in ds.coords.items() if k != 'time'}
+        )
+        ds_padded = ds_padded.assign_coords(time=('time', new_time))
+
+    # overwrite the file with the padded dataset
+    ds_padded.to_netcdf(fname, mode="w")
+    print(f"Padded {fname} with an extra timestep ({pd.to_datetime(padded_time)})")
 
 def has_valid_time_range(file_path, expected_timesteps=None, time_var="time"):
     """
@@ -230,7 +263,7 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
         else:
             missing_vars.append(var)
             
-   # --- Step 2: Download only missing files ---
+    # --- Step 2: Download only missing files ---
     if missing_vars:
         print(f"\nNeed to download {len(missing_vars)} file(s): {missing_vars}\n")
 
@@ -260,25 +293,29 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
                 download_worker(var)
 
     # --- Step 3: Post-check all files (including just-downloaded ones) ---
-    # This avoids potential "bad downloads" that seems to happen quite often with HYCOM
-    
+    # This avoids potential "bad downloads" that seems to happen quite often with HYCOM.
+    # We padd the last time step if it is missing and recheck. 
+    # If it still is incorrect the download will fail. 
     bad_files = []
     for var in VARIABLES:
         fname = output_dir / VARIABLES[var]["fname"]
         if fname.exists():
             valid, msg = has_valid_time_range(fname, 1 + hdays + fdays, "time")
-            print(f"\nFinal check: {fname} -> {valid}, {msg}")
+            print(f"\nFinal check: {fname} -> {valid}, {msg}\n")
             if not valid:
-                fname.unlink()
-                bad_files.append(fname.name)
+                try:
+                    pad_time_step_file(fname)
+                    # re-check validity after padding
+                    valid2, msg2 = has_valid_time_range(fname, 1 + hdays + fdays, "time")
+                    if not valid2:
+                        fname.unlink()
+                        bad_files.append(fname.name)
+                except Exception as e:
+                    print(f"\nPadding failed for {fname}: {e}\n")
+                    fname.unlink()
+                    bad_files.append(fname.name)
         else:
             bad_files.append(fname.name)
-
-    if bad_files:
-        raise RuntimeError(
-            f"Some files are still invalid after download: {bad_files}. "
-            "They were removed and must be retried by the workflow."
-        )
 
     # --- Step 4: Merge only if all files exist and they have the correct time range ---
     files = [output_dir / VARIABLES[var]["fname"] for var in VARIABLES]
@@ -298,13 +335,13 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
     else:
         missing = [f.name for f in files if not f.exists()]
         raise RuntimeError(
-            f"Missing files after download attempt: {missing} — will need to retry."
+            f"\nMissing files after download attempt: {missing} — will need to retry."
         )
         
 if __name__ == '__main__':
-    run_date = pd.to_datetime('2025-09-17 00:00:00')
-    hdays = 1
-    fdays = 1
+    run_date = pd.to_datetime('2025-09-19 00:00:00')
+    hdays = 0
+    fdays = 0
     #domain = [11,36,-39,-25]
     domain = [11,12,-39,-38]
     outputDir = '/home/g.rautenbach/Projects/somisana-croco/DATASETS_CROCOTOOLS/HYCOM/'
