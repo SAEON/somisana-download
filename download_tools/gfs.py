@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
+import time
 import urllib
 import urllib.request
 from urllib.error import HTTPError, URLError
@@ -61,16 +62,18 @@ def download_file(fname, outputDir, encoded_params):
 
             if download_success:
                 return
-            else:
+            elif attempt < max_retries:
                 print(f"Retrying {fileout} download in {delay} seconds...")
+                time.sleep(delay)
+        raise RuntimeError(f"Failed to download {fname} after {max_retries} attempts")
     else:
         print("File already exists", fileout)
 
-def check_gfs_availability(dt):
+def check_gfs_availability(dt, fhr=0):
     """
-    Check if a GFS .idx file exists for a given datetime
+    Check if a GFS .idx file exists for a given datetime and forecast hour
     """
-    fhr_str = "000"
+    fhr_str = str(fhr).zfill(3)
     idx_url = (
         "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/gfs."
         + dt.strftime("%Y%m%d")
@@ -96,7 +99,7 @@ def check_gfs_availability(dt):
         #print(f"Failed to access .idx file at {idx_url}: {e}")
         return False
 
-def get_latest_available_dt(dt):
+def get_latest_available_dt(dt, last_fhr=6):
     latest_available_date = datetime(dt.year, dt.month, dt.day, 18, 0, 0)
     gfs_exists = False
     iters = 0
@@ -107,7 +110,7 @@ def get_latest_available_dt(dt):
             exit(1)
 
         print("Testing GFS availability: ", latest_available_date.strftime("%Y%m%d_%H"))
-        gfs_exists = check_gfs_availability(latest_available_date)
+        gfs_exists = check_gfs_availability(latest_available_date, fhr=last_fhr)
         if not gfs_exists: 
             latest_available_date = latest_available_date + timedelta(hours=-6)
             iters += 1
@@ -137,7 +140,8 @@ def download_gfs_atm(domain, run_date, hdays, fdays, outputDir):
     fdays = fdays + 0.25
     start_date = run_date + timedelta(days=-hdays)
 
-    latest_available_date = get_latest_available_dt(run_date)
+    last_fhr = int(fdays * 24)
+    latest_available_date = get_latest_available_dt(run_date, last_fhr=last_fhr)
     #latest_available_date = run_date ## FOR DEBUGGING - DELETE
     delta_days = (latest_available_date - run_date).total_seconds() / 86400
 
