@@ -132,6 +132,8 @@ def download_hindcast(start, end, outputDir, params):
 
 def download_forecast(total_forecast_hours, latest_available_date, outputDir, params):
     for i in range(1, total_forecast_hours + 1):
+        if i > 120 and i % 3 != 0:
+            continue  # GFS switches to 3-hourly output after f120
         download_file(create_fname(latest_available_date, i), outputDir, set_params(params, latest_available_date, i))
 
 def download_gfs_atm(domain, run_date, hdays, fdays, outputDir):
