@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
+import time
 import urllib
 import urllib.request
+from urllib.error import HTTPError, URLError
 
 """
 Download GFS forecast data
@@ -60,51 +62,65 @@ def download_file(fname, outputDir, encoded_params):
 
             if download_success:
                 return
-            else:
+            elif attempt < max_retries:
                 print(f"Retrying {fileout} download in {delay} seconds...")
+                time.sleep(delay)
+        raise RuntimeError(f"Failed to download {fname} after {max_retries} attempts")
     else:
         print("File already exists", fileout)
 
-def get_latest_available_dt(dt):
+def check_gfs_availability(dt, fhr=0):
+    """
+    Check if a GFS .idx file exists for a given datetime and forecast hour
+    """
+    fhr_str = str(fhr).zfill(3)
+    idx_url = (
+        "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/gfs."
+        + dt.strftime("%Y%m%d")
+        + "/"
+        + dt.strftime("%H")
+        + "/atmos/gfs.t"
+        + dt.strftime("%H")
+        + "z.pgrb2.0p25.f"
+        + fhr_str
+        + ".idx"
+    )
+
+    try:
+        req = urllib.request.Request(idx_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req) as resp:
+            content = resp.read().decode("utf-8")
+            if len(content.strip()) > 0:
+                return True
+            else:
+                #print(f".idx file empty at {idx_url}")
+                return False
+    except (HTTPError, URLError) as e:
+        #print(f"Failed to access .idx file at {idx_url}: {e}")
+        return False
+
+def get_latest_available_dt(dt, last_fhr=6):
     latest_available_date = datetime(dt.year, dt.month, dt.day, 18, 0, 0)
     gfs_exists = False
     iters = 0
-    
-    def check_file_exists(url):
-        try:
-            response = urllib.request.urlopen(url)  # Attempt to open the URL
-            return response.status == 200         # Check for HTTP 200 OK 
-        except Exception:  # Catch potential network-related errors
-            return False
 
     while not (gfs_exists):
         if iters > 4:
             print("GFS data is not presently available")
             exit(1)
 
-        dataset_url = (
-            "https://nomads.ncep.noaa.gov/dods/gfs_0p25/gfs"
-            + latest_available_date.strftime("%Y%m%d")
-            + "/gfs_0p25_"
-            + latest_available_date.strftime("%H")
-            + "z"
-        )
-
-        print("Testing GFS availability", dataset_url)
-        response = urllib.request.urlopen(dataset_url)
-        data = response.read().decode('utf-8')  # Read the response data
-        if "is not an available service" in data: 
+        print("Testing GFS availability: ", latest_available_date.strftime("%Y%m%d_%H"))
+        gfs_exists = check_gfs_availability(latest_available_date, fhr=last_fhr)
+        if not gfs_exists: 
             latest_available_date = latest_available_date + timedelta(hours=-6)
             iters += 1
         else:
-            # Assume valid if error message is not found
             print(
-                "Latest available GFS initialisation found at",
-                dataset_url,
+                    "GFS data available for: ",
+                latest_available_date.strftime("%Y%m%d_%H"),
                 "\n",
                 "\n",
             )
-            gfs_exists = True
 
     return latest_available_date
 
@@ -116,6 +132,8 @@ def download_hindcast(start, end, outputDir, params):
 
 def download_forecast(total_forecast_hours, latest_available_date, outputDir, params):
     for i in range(1, total_forecast_hours + 1):
+        if i > 120 and i % 3 != 0:
+            continue  # GFS switches to 3-hourly output after f120
         download_file(create_fname(latest_available_date, i), outputDir, set_params(params, latest_available_date, i))
 
 def download_gfs_atm(domain, run_date, hdays, fdays, outputDir):
@@ -124,7 +142,8 @@ def download_gfs_atm(domain, run_date, hdays, fdays, outputDir):
     fdays = fdays + 0.25
     start_date = run_date + timedelta(days=-hdays)
 
-    latest_available_date = get_latest_available_dt(run_date)
+    last_fhr = int(fdays * 24)
+    latest_available_date = get_latest_available_dt(run_date, last_fhr=last_fhr)
     #latest_available_date = run_date ## FOR DEBUGGING - DELETE
     delta_days = (latest_available_date - run_date).total_seconds() / 86400
 
