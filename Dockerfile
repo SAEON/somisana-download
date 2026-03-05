@@ -9,9 +9,9 @@
 #
 # TODO: maybe add a user and run the image as a user rather than as root?
 
-# start with a mambaforge base image
-# We're fixing the mambaforge version due to dependency issues which get introduced if left open ended
-FROM condaforge/mambaforge:24.1.2-0
+# start with a miniforge base image
+# We're fixing the miniforge version due to dependency issues which get introduced if left open ended
+FROM condaforge/miniforge3:26.1.0-0
 
 ENV DEBIAN_FRONTEND noninteractive
 
