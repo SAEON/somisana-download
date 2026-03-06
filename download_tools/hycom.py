@@ -2,11 +2,12 @@ import xarray as xr
 import cftime
 import pandas as pd
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 import numpy as np
 from pathlib import Path
 import tempfile
 import threading
+import calendar
 from glob import glob
 from time import sleep
 
@@ -81,6 +82,8 @@ def download_hycom(dataset, var, start_date, end_date, domain, depths, outputDir
         MAX_TRIES = 100
         success = False
         while i <= MAX_TRIES:
+            # Phase 1: open dataset and verify time coverage
+            ds = None
             try:
                 ds = xr.open_dataset(
                     dataset,
@@ -90,55 +93,79 @@ def download_hycom(dataset, var, start_date, end_date, domain, depths, outputDir
                 try:
                     ds['time'] = decode_time_units(ds['time'])
                     print(f"[Try {i}] Decoded the times.")
-                    if np.unique(ds['time']).size >= Nt:
-                        success = True
-                        break  # Exit the loop if we have the right number of time steps
-                    else:
+                    if np.unique(ds['time']).size < Nt:
                         print(f"[Try {i}] Incomplete time coverage.")
                         ds.close()
                         i += 1
+                        sleep(5)
+                        continue
                 except Exception as e:
                     print(f"[Try {i}] Time decoding failed: {e}")
                     ds.close()
                     i += 1
+                    sleep(5)
+                    continue
             except Exception as e:
                 print(f"[Try {i}] Dataset open failed: {e}")
+                if ds is not None:
+                    ds.close()
                 i += 1
-        if not success:
-            raise RuntimeError(f"Failed to open and decode the dataset correctly after {MAX_TRIES} attempts.")
-    
-        variable = ds[var].sel(time=slice(start_date,end_date))
-                
-        if variable.ndim == 4: variable = variable.sel(depth=depth_range)
-    
-        variable = variable.resample(time='1D').mean()
-        
-        tmp_dir = Path(tempfile.mkdtemp())
-        time_slices = []
-        
-        for t in range(variable.time.values.size):
+                sleep(5)
+                continue
+
+            # Phase 2: download timesteps and validate data
+            variable = ds[var].sel(time=slice(start_date,end_date))
+
+            if variable.ndim == 4: variable = variable.sel(depth=depth_range)
+
+            variable = variable.resample(time='1D').mean()
+
+            tmp_dir = Path(tempfile.mkdtemp())
+            time_slices = []
+
             try:
-                # Save temporary file
-                time_str = pd.to_datetime(variable.time.values[t]).strftime("%Y-%m-%d")
-                tmp_file = tmp_dir / f"{var}_{time_str}.nc"
-                v=variable[t]
-                v.to_netcdf(tmp_file)
-                time_slices.append(tmp_file)
-            except Exception as e:
-                print(f"Failed to download time {t}: {e}")
-       
-        # Combine time slices
-        datasets = [xr.open_dataset(f) for f in time_slices]
-        combined = xr.concat(datasets, dim="time")
-        combined = combined.sortby('time')
-    
-        save_path = os.path.join(outputDir, fname)
-        combined=combined.sel(time=slice(start_date, end_date))
-        combined.to_netcdf(save_path)
-    
-        ds.close()
-        for f in time_slices:
-            f.unlink()
+                has_nan = False
+                for t in range(variable.time.values.size):
+                    try:
+                        # Save temporary file
+                        time_str = pd.to_datetime(variable.time.values[t]).strftime("%Y-%m-%d")
+                        tmp_file = tmp_dir / f"{var}_{time_str}.nc"
+                        v=variable[t]
+                        v.load()
+                        # Check if the data is all NaN (server returned fill values)
+                        if np.all(np.isnan(v.values)):
+                            print(f"[Try {i}] WARNING: {var} at {time_str} is all NaN")
+                            has_nan = True
+                            break
+                        v.to_netcdf(tmp_file)
+                        time_slices.append(tmp_file)
+                    except Exception as e:
+                        print(f"Failed to download time {t}: {e}")
+
+                if has_nan:
+                    print(f"[Try {i}] Data not fully available yet. Retrying in 5 minutes...")
+                    i += 1
+                    sleep(300)
+                    continue
+
+                # Combine time slices
+                with xr.open_mfdataset(time_slices, combine='by_coords') as combined:
+                    combined = combined.sortby('time')
+                    save_path = os.path.join(outputDir, fname)
+                    combined = combined.sel(time=slice(start_date, end_date))
+                    combined.to_netcdf(save_path)
+                success = True
+                break
+
+            finally:
+                ds.close()
+                for f in time_slices:
+                    f.unlink()
+                if tmp_dir.exists():
+                    tmp_dir.rmdir()
+
+        if not success:
+            raise RuntimeError(f"Failed to download valid data for {var} after {MAX_TRIES} attempts.")
 
 def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True):
     """
@@ -151,7 +178,7 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
     hdays     : Days to hindcast (e.g. hdays=5).
     fdays     : Days to forecast (e.g. fdays=5).
     outputDir : Directory to save the downloaded data (eg. outputDir='/path/and/directory/to/save/').
-    parallel  : Default is False = downloading in series. True = parallel download. 
+    parallel  : Default is True = parallel download. False = downloading in series.
     OUTPUT:
     NetCDF file containing the most recent HYCOM forcast run.
     """
@@ -225,6 +252,235 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
     
     else:
         raise RuntimeError(f"Expected 5 files, found {len(files)} — download/s may have failed.")
+
+def _download_day(dataset_url, day_start, day_end, var_list, depth_range,
+                  surface, lon_range, lat_range, vars_to_drop, tmp_dir):
+    """
+    Download a single day's data by opening its own OPeNDAP connection.
+    Each thread gets an independent netCDF4 handle to avoid segfaults.
+    Returns the path to the temp file, or None on failure.
+    """
+    day_str = day_start.strftime('%Y-%m-%d')
+    tmp_file = os.path.join(tmp_dir, f'{day_str}.nc')
+
+    # skip if already downloaded (e.g. from a previous partial run)
+    if os.path.exists(tmp_file):
+        return tmp_file
+
+    MAX_RETRIES = 3
+    for attempt in range(1, MAX_RETRIES + 1):
+        ds = None
+        try:
+            ds = xr.open_dataset(
+                dataset_url,
+                drop_variables=vars_to_drop,
+                decode_times=False
+            )
+            ds['time'] = decode_time_units(ds['time'])
+            ds = ds.sel(lat=lat_range, lon=lon_range)
+
+            ds_day = ds.sel(time=slice(day_start, day_end))
+            if ds_day.time.size == 0:
+                ds.close()
+                return None
+
+            if var_list is not None:
+                ds_day = ds_day[var_list]
+
+            if not surface and 'depth' in ds_day.dims:
+                ds_day = ds_day.sel(depth=depth_range)
+
+            ds_day.to_netcdf(tmp_file)
+            ds.close()
+            print(f'  {day_str} OK')
+            return tmp_file
+
+        except Exception as e:
+            if ds is not None:
+                ds.close()
+            print(f'  {day_str} attempt {attempt} failed: {e}')
+            if attempt < MAX_RETRIES:
+                sleep(5)
+            else:
+                print(f'  {day_str} SKIPPED after {MAX_RETRIES} attempts')
+                return None
+
+
+def download_hycom_gofs31(domain, start_date, end_date, outputDir,
+                          var_list=None, depths=[0, 5000], surface=False):
+    """
+    Downloads HYCOM GOFS 3.1 (GLBy0.08/expt_93.0) data in monthly files.
+    Downloads are done day-by-day sequentially, then concatenated into
+    monthly YYYY_MM.nc files.
+
+    INPUTS:
+    domain     : [lon_min, lon_max, lat_min, lat_max]
+    start_date : Start datetime for the download period.
+    end_date   : End datetime for the download period.
+    outputDir  : Directory to save the downloaded monthly NetCDF files.
+    var_list   : List of variable names to download.
+                 Default (3-hourly): ['surf_el', 'water_temp', 'salinity', 'water_u', 'water_v']
+                 Default (surface):  all surface variables in the dataset
+    depths     : [depth_min, depth_max] for subsetting depth (only for 3-hourly 4D variables).
+                 Default [0, 5000].
+    surface    : False (default) = 3-hourly data, True = hourly surface data.
+
+    OUTPUT:
+    Monthly NetCDF files named YYYY_MM.nc in outputDir.
+    """
+
+    # OPeNDAP URLs
+    # 3-hourly data is a single aggregated dataset
+    # Surface data is organized by year: .../sur/{YYYY}
+    if surface:
+        url_base = "https://tds.hycom.org/thredds/dodsC/GLBy0.08/expt_93.0/sur"
+    else:
+        url = "https://tds.hycom.org/thredds/dodsC/GLBy0.08/expt_93.0"
+
+    # Default variable lists
+    if var_list is None:
+        if surface:
+            var_list = ['ssh', 'qtot', 'emp', 'steric_ssh',
+                        'u_barotropic_velocity', 'v_barotropic_velocity',
+                        'surface_boundary_layer_thickness', 'mixed_layer_thickness']
+        else:
+            var_list = ['surf_el', 'water_temp', 'salinity', 'water_u', 'water_v']
+
+    # Variables to drop (auxiliary/coordinate variables we don't need)
+    vars_to_drop = ['tau']
+
+    os.makedirs(outputDir, exist_ok=True)
+
+    # Spatial subset slices
+    lon_range = slice(domain[0], domain[1])
+    lat_range = slice(domain[2], domain[3])
+    depth_range = slice(depths[0], depths[1])
+
+    # Loop month by month
+    download_date = start_date
+    while download_date <= end_date:
+
+        # start and end days of this month
+        month_start = datetime(download_date.year, download_date.month, 1)
+        day_end = calendar.monthrange(download_date.year, download_date.month)[1]
+        month_end = datetime(download_date.year, download_date.month, day_end, 23, 59, 59)
+
+        # output filename matching CMEMS convention
+        fname = download_date.strftime('%Y_%m') + '.nc'
+        fpath = os.path.join(outputDir, fname)
+
+        print(f'\n{download_date.strftime("%Y-%m")}')
+
+        # skip if file already exists and is valid
+        if os.path.exists(fpath):
+            try:
+                with xr.open_dataset(fpath) as _:
+                    print(f'{fname} already exists. Skipping.')
+                    download_date = download_date + timedelta(days=32)
+                    download_date = datetime(download_date.year, download_date.month, 1)
+                    continue
+            except Exception:
+                print(f'{fname} exists but is invalid. Re-downloading.')
+                os.unlink(fpath)
+
+        # For surface data, construct yearly URL
+        if surface:
+            dataset_url = f"{url_base}/{download_date.year}"
+        else:
+            dataset_url = url
+
+        # Open dataset with retry logic (lazy load via OPeNDAP)
+        MAX_RETRIES = 5
+        RETRY_WAIT = 10
+        ds = None
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                ds = xr.open_dataset(
+                    dataset_url,
+                    drop_variables=vars_to_drop,
+                    decode_times=False
+                )
+                ds['time'] = decode_time_units(ds['time'])
+                print(f'[Attempt {attempt}] Dataset opened and times decoded.')
+                break
+            except Exception as e:
+                print(f'[Attempt {attempt}] Failed to open dataset: {e}')
+                if ds is not None:
+                    ds.close()
+                    ds = None
+                if attempt < MAX_RETRIES:
+                    print(f'Retrying in {RETRY_WAIT} seconds...')
+                    sleep(RETRY_WAIT)
+                else:
+                    raise RuntimeError(
+                        f'Failed to open HYCOM GOFS 3.1 dataset after {MAX_RETRIES} attempts.'
+                    )
+
+        try:
+            # Check data availability for this month using the initial connection
+            ds = ds.sel(lat=lat_range, lon=lon_range)
+            ds_month_check = ds.sel(time=slice(month_start, month_end))
+            if ds_month_check.time.size == 0:
+                print(f'No data available for {download_date.strftime("%Y-%m")}. Skipping.')
+                ds.close()
+                download_date = download_date + timedelta(days=32)
+                download_date = datetime(download_date.year, download_date.month, 1)
+                continue
+            ds.close()
+
+            # Create temp directory for daily files inside outputDir
+            tmp_dir = tempfile.mkdtemp(
+                prefix=f'.hycom_gofs31_{download_date.strftime("%Y_%m")}_',
+                dir=outputDir
+            )
+
+            # Build list of days in this month
+            days = []
+            d = month_start
+            while d <= month_end:
+                day_start = d
+                day_end_dt = datetime(d.year, d.month, d.day, 23, 59, 59)
+                days.append((day_start, day_end_dt))
+                d = d + timedelta(days=1)
+
+            # Download days sequentially (netCDF4's C library is not thread-safe
+            # with OPeNDAP, causing memory corruption when using threads)
+            print(f'Downloading {len(days)} days...')
+            daily_files = []
+
+            for day_s, day_e in days:
+                result = _download_day(
+                    dataset_url, day_s, day_e, var_list, depth_range,
+                    surface, lon_range, lat_range, vars_to_drop, tmp_dir
+                )
+                if result is not None:
+                    daily_files.append(result)
+
+            # Sort by filename (date order) and concatenate
+            daily_files.sort()
+
+            if len(daily_files) == 0:
+                print(f'No daily files downloaded for {download_date.strftime("%Y-%m")}. Skipping.')
+            else:
+                print(f'Concatenating {len(daily_files)} daily files into {fname}...')
+                with xr.open_mfdataset(daily_files, combine='by_coords') as ds_combined:
+                    ds_combined.to_netcdf(fpath)
+                print(f'Saved {fname}')
+
+            # Clean up temp files
+            for f in daily_files:
+                os.unlink(f)
+            os.rmdir(tmp_dir)
+
+        except Exception:
+            ds.close()
+            raise
+
+        # Advance to next month
+        download_date = download_date + timedelta(days=32)
+        download_date = datetime(download_date.year, download_date.month, 1)
+
 
 if __name__ == '__main__':
     run_date = pd.to_datetime('2025-08-22 00:00:00')
