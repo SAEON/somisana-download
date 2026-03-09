@@ -79,7 +79,7 @@ def download_hycom(dataset, var, start_date, end_date, domain, depths, outputDir
     if Path(outputDir, fname).exists(): print(f'\n{fname} already exist.\nDownload skipped.\n')
     else:
         i = 1
-        MAX_TRIES = 100
+        MAX_TRIES = 20
         success = False
         while i <= MAX_TRIES:
             # Phase 1: open dataset and verify time coverage
@@ -130,7 +130,7 @@ def download_hycom(dataset, var, start_date, end_date, domain, depths, outputDir
                         # Save temporary file
                         time_str = pd.to_datetime(variable.time.values[t]).strftime("%Y-%m-%d")
                         tmp_file = tmp_dir / f"{var}_{time_str}.nc"
-                        v=variable[t]
+                        v=variable.isel(time=slice(t, t+1))
                         v.load()
                         # Check if the data is all NaN (server returned fill values)
                         if np.all(np.isnan(v.values)):
