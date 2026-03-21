@@ -91,7 +91,7 @@ def main():
                         default=[10, 25, -40, -25],
                         help='comma separated list of domain extent to download i.e. "lon0,lon1,lat0,lat1"')
     parser_download_cmems_ops.add_argument('--depths', type=parse_list, 
-                        default=[0.493, 5727.918],
+                        default=[0, 5800],
                         help='comma separated list of depth extent to download (positive down). For all depths use "0.493,5727.918"')
     parser_download_cmems_ops.add_argument('--run_date', required=True, type=parse_datetime, 
                         help='current time in format "YYYY-MM-DD HH:MM:SS"')
@@ -104,9 +104,12 @@ def main():
     parser_download_cmems_ops.add_argument('--outputDir', required=True, help='Directory to save file') 
     parser_download_cmems_ops.add_argument('--outputFile', required=True, help='Output file name') 
     def download_cmems_ops_handler(args):
-        start_date = run_date + timedelta(days=-args.hdays)
-        end_date = run_date + timedelta(days=args.fdays)
-        download_cmems(args.usrname, args.passwd, args.dataset, args.varlist, start_date, end_date, args.domain, args.depths, args.outputDir, args.outputFile)
+        # extend the download range by a day either side so we are guarenteed to cover the required model run time
+        hdays = args.hdays + 1
+        fdays = args.fdays + 1
+        start_date = args.run_date + timedelta(days=-hdays)
+        end_date = args.run_date + timedelta(days=fdays)
+        download_cmems(args.usrname, args.passwd, args.dataset, args.varList, start_date, end_date, args.domain, args.depths, args.outputDir, args.outputFile)
     parser_download_cmems_ops.set_defaults(func=download_cmems_ops_handler)
 
     # ----------------------
