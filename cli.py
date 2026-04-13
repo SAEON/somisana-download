@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from download_tools.cmems import download_cmems, download_cmems_monthly, download_mercator_ops
 from download_tools.gfs import download_gfs_atm
 from download_tools.hycom import download_hycom_ops, download_hycom_gofs31
+from download_tools.phyto import download_phytoplankton_flags
 
 # functions to help parsing string input to object types needed by python functions
 def parse_datetime(value):
@@ -207,6 +208,19 @@ def main():
         download_hycom_gofs31(args.domain, args.start_date, args.end_date, args.outputDir,
                               args.var_list, args.depths, args.surface)
     parser_download_hycom_gofs31.set_defaults(func=download_hycom_gofs31_handler)
+
+    # -------------------------
+    # download_phytoplankton_flags
+    # -------------------------
+    parser_download_phytoplankton_flags = subparsers.add_parser('download_phytoplankton_flags',
+            help='Download and convert daily CSIR phytoplankton flags as NetCDF file via OPeNDAP')
+    parser_download_phytoplankton_flags.add_argument('--file_in', required=True,
+                                            help='Directory/URL and file name of the phytoplankton flags Geotif file.')
+    parser_download_phytoplankton_flags.add_argument('--file_out', required=True, 
+                                            help='File directory and name to save file the output NetCDF file.')
+    def download_phytoplankton_flags_handler(args):
+        download_phytoplankton_flags(args.file_in, args.file_out)
+    parser_download_phytoplankton_flags.set_defaults(func=download_phytoplankton_flags_handler)
 
     args = parser.parse_args()
     if hasattr(args, 'func'):
