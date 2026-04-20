@@ -24,5 +24,5 @@ def download_phytoplankton_flags(file_in,file_out):
 
         print("All Done")
     except Exception as e:
-        print(f"Error processing {run_date}: {e}")
+        print(f"Error processing {file_in}: {e}")
         raise
