@@ -213,13 +213,12 @@ def main():
     # download_phytoplankton_flags
     # -------------------------
     parser_download_phytoplankton_flags = subparsers.add_parser('download_phytoplankton_flags',
-            help='Download and convert daily CSIR phytoplankton flags as NetCDF file via OPeNDAP')
-    parser_download_phytoplankton_flags.add_argument('--file_in', required=True,
-                                            help='Directory/URL and file name of the phytoplankton flags Geotif file.')
-    parser_download_phytoplankton_flags.add_argument('--file_out', required=True, 
-                                            help='File directory and name to save file the output NetCDF file.')
+                        help='Download the daily phytoplankton flags as NetCDF file from CSIR - https://www.ocims.gov.za/data/s3olci/s3-phytoplankton-south_africa ')
+    parser_download_phytoplankton_flags.add_argument('--date', required=True, type=parse_datetime,
+                        help='start time in format "YYYY-MM-DD HH:MM:SS"')
+    parser_download_phytoplankton_flags.add_argument('--dir_out', required=True, help='Directory to save files') 
     def download_phytoplankton_flags_handler(args):
-        download_phytoplankton_flags(args.file_in, args.file_out)
+        download_phytoplankton_flags(args.date, args.dir_out)
     parser_download_phytoplankton_flags.set_defaults(func=download_phytoplankton_flags_handler)
 
     args = parser.parse_args()
