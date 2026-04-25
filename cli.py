@@ -12,7 +12,7 @@ import sys, os
 from datetime import datetime, timedelta
 from download_tools.cmems import download_cmems, download_cmems_monthly, download_mercator_ops
 from download_tools.gfs import download_gfs_atm
-from download_tools.hycom import download_hycom_ops
+from download_tools.hycom import download_hycom_ops, download_hycom_gofs31
 
 # functions to help parsing string input to object types needed by python functions
 def parse_datetime(value):
@@ -91,7 +91,7 @@ def main():
                         default=[10, 25, -40, -25],
                         help='comma separated list of domain extent to download i.e. "lon0,lon1,lat0,lat1"')
     parser_download_cmems_ops.add_argument('--depths', type=parse_list, 
-                        default=[0.493, 5727.918],
+                        default=[0, 5800],
                         help='comma separated list of depth extent to download (positive down). For all depths use "0.493,5727.918"')
     parser_download_cmems_ops.add_argument('--run_date', required=True, type=parse_datetime, 
                         help='current time in format "YYYY-MM-DD HH:MM:SS"')
@@ -104,9 +104,12 @@ def main():
     parser_download_cmems_ops.add_argument('--outputDir', required=True, help='Directory to save file') 
     parser_download_cmems_ops.add_argument('--outputFile', required=True, help='Output file name') 
     def download_cmems_ops_handler(args):
-        start_date = run_date + timedelta(days=-args.hdays)
-        end_date = run_date + timedelta(days=args.fdays)
-        download_cmems(args.usrname, args.passwd, args.dataset, args.varlist, start_date, end_date, args.domain, args.depths, args.outputDir, args.outputFile)
+        # extend the download range by a day either side so we are guarenteed to cover the required model run time
+        hdays = args.hdays + 1
+        fdays = args.fdays + 1
+        start_date = args.run_date + timedelta(days=-hdays)
+        end_date = args.run_date + timedelta(days=fdays)
+        download_cmems(args.usrname, args.passwd, args.dataset, args.varList, start_date, end_date, args.domain, args.depths, args.outputDir, args.outputFile)
     parser_download_cmems_ops.set_defaults(func=download_cmems_ops_handler)
 
     # ----------------------
@@ -178,7 +181,33 @@ def main():
         download_hycom_ops(args.domain, args.run_date, args.hdays, args.fdays, args.outputDir, args.parallel)
     parser_download_hycom_ops.set_defaults(func=download_hycom_ops_handler)
     
-    
+    # -------------------------
+    # download_hycom_gofs31
+    # -------------------------
+    parser_download_hycom_gofs31 = subparsers.add_parser('download_hycom_gofs31',
+            help='Download monthly HYCOM GOFS 3.1 (GLBy0.08/expt_93.0) data via OPeNDAP')
+    parser_download_hycom_gofs31.add_argument('--domain', type=parse_list,
+                        default=[10, 25, -40, -25],
+                        help='comma separated list of domain extent to download i.e. "lon0,lon1,lat0,lat1"')
+    parser_download_hycom_gofs31.add_argument('--start_date', required=True, type=parse_datetime,
+                        help='start time in format "YYYY-MM-DD HH:MM:SS"')
+    parser_download_hycom_gofs31.add_argument('--end_date', required=True, type=parse_datetime,
+                        help='end time in format "YYYY-MM-DD HH:MM:SS"')
+    parser_download_hycom_gofs31.add_argument('--outputDir', required=True, help='Directory to save files')
+    parser_download_hycom_gofs31.add_argument('--var_list', type=parse_list_str,
+                        default=None,
+                        help='comma separated list of variables e.g. "surf_el,water_temp,salinity,water_u,water_v"')
+    parser_download_hycom_gofs31.add_argument('--depths', type=parse_list,
+                        default=[0, 5000],
+                        help='comma separated list of depth extent to download e.g. "0,5000"')
+    parser_download_hycom_gofs31.add_argument('--surface', type=parse_bool,
+                        default=False,
+                        help='true = hourly surface data, false = 3-hourly 3D data (default)')
+    def download_hycom_gofs31_handler(args):
+        download_hycom_gofs31(args.domain, args.start_date, args.end_date, args.outputDir,
+                              args.var_list, args.depths, args.surface)
+    parser_download_hycom_gofs31.set_defaults(func=download_hycom_gofs31_handler)
+
     args = parser.parse_args()
     if hasattr(args, 'func'):
         args.func(args)

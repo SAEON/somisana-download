@@ -142,10 +142,13 @@ def download_mercator_ops(usrname, passwd, domain, run_date, hdays, fdays, outpu
         t.join()
     
     # Concatenate the separate NetCDF files
-    print("concatenating NetCDF files")
+    print("merge NetCDF files")
     output_path = os.path.abspath(os.path.join(outputDir, f"MERCATOR_{run_date.strftime('%Y%m%d_%H')}.nc"))
-    with xr.open_mfdataset([os.path.abspath(os.path.join(outputDir, var["fname"])) for var in VARIABLES]) as ds:
-        ds.to_netcdf(output_path, mode="w")
+    datasets = [xr.open_dataset(os.path.join(outputDir, var["fname"])) for var in VARIABLES]
+    merged = xr.merge(datasets)
+    merged.to_netcdf(output_path, mode="w")
+    for ds in datasets:
+        ds.close()
 
     subprocess.call(["chmod", "-R", "775", output_path])
     

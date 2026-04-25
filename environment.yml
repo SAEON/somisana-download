@@ -2,12 +2,13 @@ name: download
 channels:
   - conda-forge
 dependencies:
-  - python >=3.11
-  - numpy>=1.17
-  - netcdf4<=1.6.1
-  - xarray>=2023.4.0
-  - dask>=2023.4.0
+  - python=3.11
+  - numpy
+  - netcdf4
+  - xarray
+  - dask
   - pathlib
   - pandas
-  - zarr>=3
+  - zarr
   - copernicusmarine
+  - rioxarray
