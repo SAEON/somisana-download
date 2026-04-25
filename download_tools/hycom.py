@@ -10,6 +10,7 @@ import threading
 import calendar
 from glob import glob
 from time import sleep
+import shutil
 
 def update_var_list(var_list,run_date):
     var_metadata = {
@@ -56,116 +57,169 @@ def decode_time_units(time_var):
         raise RuntimeError(f"Error decoding time units: {e}")
 
 def download_hycom(dataset, var, start_date, end_date, domain, depths, outputDir, fname):
-    vars_to_drop = ['salinity_bottom', 'water_temp_bottom', 'water_u_bottom', 'water_v_bottom', 'tau', 'time_offset',
-                    'time_run', 'time1_offset', 'sst', 'sss', 'ssu', 'ssv', 'sic', 'sih', 'siu', 'siv', 'surtx',
-                    'surty', 'steric_ssh']
-    
-    # define spatial subsets
-    lon_range, lat_range = slice(domain[0], domain[1]), slice(domain[2], domain[3])
-    
-    if len(depths) > 1 : depth_range = slice(depths[0], depths[1])
-    else: depth_range = depths[0]
-    
-    print('')
-    print(f'Downloading: {var}')
-    
-    # Because of xarray (and netCDF4) lazy way of loading files using Opendap, sometimes it 
-    # does not read in the times correctly, hence the lazy loading. This leads to issues when subsetting. 
-    # Therefore, we impose a loop to ensure that it does load in the files correctly before continuing 
-    # with the subsetting and downloading.
-    if 'surf_el' in var: Nt = 361 # hourly for ssh
-    else: Nt = 121                # three hourly for water_temp, salinity, water_u and water_v
+    """
+    Robust HYCOM downloader using DAILY requests instead of one large
+    multi-day OPeNDAP request. It may be slower, but I believe it is more 
+    reliable.
 
-    if Path(outputDir, fname).exists(): print(f'\n{fname} already exist.\nDownload skipped.\n')
+    Workflow:
+        1. Loop over each day
+        2. Open remote dataset fresh each day
+        3. Subset that day in time and space 
+        4. Compute daily mean
+        5. Save temp daily file
+        6. Merge temp files into final NetCDF
+    """
+
+    vars_to_drop = [
+        'salinity_bottom', 'water_temp_bottom', 'water_u_bottom',
+        'water_v_bottom', 'tau', 'time_offset', 'time_run',
+        'time1_offset', 'sst', 'sss', 'ssu', 'ssv', 'sic',
+        'sih', 'siu', 'siv', 'surtx', 'surty', 'steric_ssh'
+    ]
+
+    # spatial subset
+    lon_range = slice(domain[0], domain[1])
+    lat_range = slice(domain[2], domain[3])
+
+    # depth subset
+    if len(depths) > 1:
+        depth_range = slice(depths[0], depths[1])
     else:
-        i = 1
-        MAX_TRIES = 20
-        success = False
-        while i <= MAX_TRIES:
-            # Phase 1: open dataset and verify time coverage
-            ds = None
-            try:
-                ds = xr.open_dataset(
-                    dataset,
-                    drop_variables=vars_to_drop,
-                    decode_times=False
-                    ).sel(lat=lat_range, lon=lon_range)
+        depth_range = depths[0]
+
+    save_path = Path(outputDir, fname)
+
+    if save_path.exists():
+        print(f"\n{fname} already exists.\nDownload skipped.\n")
+        return
+
+    print("")
+    print(f"Downloading: {var}")
+    print(f"Start: {start_date}")
+    print(f"End  : {end_date}")
+
+    # build list of days
+    days = pd.date_range(
+        pd.Timestamp(start_date).floor("D"),
+        pd.Timestamp(end_date).floor("D"),
+        freq="1D"
+    )
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix=f"hycom_{var}_"))
+    daily_files = []
+
+    try:
+
+        # Loop over days. Slower, but maybe more reliable...
+        for day in days:
+
+            day0 = pd.Timestamp(day)
+            day1 = day0 + pd.Timedelta(days=1)
+
+            day_str = day0.strftime("%Y-%m-%d")
+
+            success = False
+            tries = 1
+            MAX_TRIES = 10
+
+            while tries <= MAX_TRIES:
+
+                ds = None
+
                 try:
-                    ds['time'] = decode_time_units(ds['time'])
-                    print(f"[Try {i}] Decoded the times.")
-                    if np.unique(ds['time']).size < Nt:
-                        print(f"[Try {i}] Incomplete time coverage.")
-                        ds.close()
-                        i += 1
-                        sleep(5)
-                        continue
+                    print(f"[{var}] {day_str} try {tries}")
+
+                    # fresh open every day
+                    # note that we do not subset spatially yet since we are dealing 
+                    # with an entire dataset and results in slower subsetting in Opendap 
+                    ds = xr.open_dataset(
+                        dataset,
+                        drop_variables=vars_to_drop,
+                        decode_times=False
+                        )
+
+                    # decode time
+                    ds["time"] = decode_time_units(ds["time"])
+
+                    # subset in time and space for lighter reading and downloading
+                    # it is faster to do the spatial subsetting on a variable 
+                    # than an entire dataset
+                    v = ds[var].sel(lat=lat_range,
+                                    lon=lon_range,
+                                    time=slice(day0, day1)
+                                    )
+
+                    # no data?
+                    if v.time.size == 0:
+                        raise RuntimeError("No time records found")
+
+                    # depth subset if variable is 4D
+                    if v.ndim == 4:
+                        v = v.sel(depth=depth_range)
+
+                    # compute daily mean
+                    v = v.mean(dim="time", skipna=True)
+
+                    # restore time dimension
+                    v = v.expand_dims(time=[day0])
+
+                    # force remote read now
+                    v.load()
+
+                    # sanity check
+                    if np.all(np.isnan(v.values)):
+                        raise RuntimeError("All NaN values")
+
+                    # save temp daily file
+                    tmp_file = tmp_dir / f"{var}_{day0:%Y%m%d}.nc"
+
+                    v.to_netcdf(tmp_file)
+
+                    daily_files.append(tmp_file)
+
+                    success = True
+                    print(f"[{var}] {day_str} complete")
+                    break
+
                 except Exception as e:
-                    print(f"[Try {i}] Time decoding failed: {e}")
-                    ds.close()
-                    i += 1
-                    sleep(5)
-                    continue
-            except Exception as e:
-                print(f"[Try {i}] Dataset open failed: {e}")
-                if ds is not None:
-                    ds.close()
-                i += 1
-                sleep(5)
-                continue
+                    print(f"[{var}] {day_str} failed try {tries}: {e}")
+                    tries += 1
+                    sleep(30)
 
-            # Phase 2: download timesteps and validate data
-            variable = ds[var].sel(time=slice(start_date,end_date))
+                finally:
+                    if ds is not None:
+                        ds.close()
 
-            if variable.ndim == 4: variable = variable.sel(depth=depth_range)
+            if not success:
+                raise RuntimeError(
+                    f"{var}: failed to download {day_str} "
+                    f"after {MAX_TRIES} tries"
+                )
 
-            variable = variable.resample(time='1D').mean()
+        # Merge the daily files
+        print(f"[{var}] Merging {len(daily_files)} daily files")
 
-            tmp_dir = Path(tempfile.mkdtemp())
-            time_slices = []
+        with xr.open_mfdataset(
+            daily_files,
+            combine="by_coords"
+        ) as combined:
 
-            try:
-                has_nan = False
-                for t in range(variable.time.values.size):
-                    try:
-                        # Save temporary file
-                        time_str = pd.to_datetime(variable.time.values[t]).strftime("%Y-%m-%d")
-                        tmp_file = tmp_dir / f"{var}_{time_str}.nc"
-                        v=variable.isel(time=slice(t, t+1))
-                        v.load()
-                        # Check if the data is all NaN (server returned fill values)
-                        if np.all(np.isnan(v.values)):
-                            print(f"[Try {i}] WARNING: {var} at {time_str} is all NaN")
-                            has_nan = True
-                            break
-                        v.to_netcdf(tmp_file)
-                        time_slices.append(tmp_file)
-                    except Exception as e:
-                        print(f"Failed to download time {t}: {e}")
+            combined = combined.sortby("time")
 
-                if has_nan:
-                    print(f"[Try {i}] Data not fully available yet. Retrying in 5 minutes...")
-                    i += 1
-                    sleep(300)
-                    continue
+            combined = combined.sel(
+                time=slice(start_date, end_date)
+            )
 
-                # Combine time slices
-                with xr.open_mfdataset(time_slices, combine='by_coords') as combined:
-                    combined = combined.sortby('time')
-                    save_path = os.path.join(outputDir, fname)
-                    combined = combined.sel(time=slice(start_date, end_date))
-                    combined.to_netcdf(save_path)
-                success = True
-                break
+            combined.to_netcdf(save_path)
 
-            finally:
-                ds.close()
-                for f in time_slices:
-                    f.unlink()
-                if tmp_dir.exists():
-                    tmp_dir.rmdir()
+        save_path.chmod(0o775)
 
-        if not success:
-            raise RuntimeError(f"Failed to download valid data for {var} after {MAX_TRIES} attempts.")
+        print(f"[{var}] Saved {save_path}")
+
+    finally:
+        # cleanup
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True):
     """
@@ -227,14 +281,14 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
             t = threading.Thread(target=download_worker, args=(var,))
             threads.append(t)
             t.start()
-            sleep(2)
+            sleep(5)
         # Wait for all threads to finish
         for t in threads:
             t.join()
         
     output_dir = Path(outputDir)  
     files = sorted(output_dir.glob("hycom_*.nc"))
-    # We ensure that all the variables have been saved before merginf it.
+    # We ensure that all the variables have been saved before merging it.
     # If there is a file missing, then the function will fail. 
     # in our operational workflow, it will restart the download automatically. 
     if len(files) == 5:       
@@ -252,7 +306,7 @@ def download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel=True)
     
     else:
         raise RuntimeError(f"Expected 5 files, found {len(files)} — download/s may have failed.")
-
+        
 def _download_day(dataset_url, day_start, day_end, var_list, depth_range,
                   surface, lon_range, lat_range, vars_to_drop, tmp_dir):
     """
@@ -481,9 +535,8 @@ def download_hycom_gofs31(domain, start_date, end_date, outputDir,
         download_date = download_date + timedelta(days=32)
         download_date = datetime(download_date.year, download_date.month, 1)
 
-
 if __name__ == '__main__':
-    run_date = pd.to_datetime('2025-08-22 00:00:00')
+    run_date = pd.to_datetime('2025-09-19 00:00:00')
     hdays = 0
     fdays = 0
     #domain = [11,36,-39,-25]
@@ -491,4 +544,3 @@ if __name__ == '__main__':
     outputDir = '/home/g.rautenbach/Projects/somisana-croco/DATASETS_CROCOTOOLS/HYCOM/'
     parallel = True
     download_hycom_ops(domain, run_date, hdays, fdays, outputDir, parallel)
-      
