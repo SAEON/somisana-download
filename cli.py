@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from download_tools.cmems import download_cmems, download_cmems_monthly, download_mercator_ops
 from download_tools.gfs import download_gfs_atm
 from download_tools.hycom import download_hycom_ops, download_hycom_gofs31
-from download_tools.phyto import download_phytoplankton_flags
+from download_tools.csir import download_phytoplankton_flags, download_chlorophyll_conc
 
 # functions to help parsing string input to object types needed by python functions
 def parse_datetime(value):
@@ -220,6 +220,18 @@ def main():
     def download_phytoplankton_flags_handler(args):
         download_phytoplankton_flags(args.date, args.dir_out)
     parser_download_phytoplankton_flags.set_defaults(func=download_phytoplankton_flags_handler)
+
+    # -------------------------
+    # download_chlorophyll_conc
+    # -------------------------
+    parser_download_chlorophyll_conc = subparsers.add_parser('download_chlorophyll_conc',
+                        help='Download the daily Chlorophyll concentration from the Sentinel-3 Satellite disseminated by CSIR - https://www.ocims.gov.za/data/s3olci/s3-chl-south_africa')
+    parser_download_chlorophyll_conc.add_argument('--date', required=True, type=parse_datetime,
+                        help='start time in format "YYYY-MM-DD HH:MM:SS"')
+    parser_download_chlorophyll_conc.add_argument('--dir_out', required=True, help='Directory to save files') 
+    def download_chlorophyll_conc_handler(args):
+        download_chlorophyll_conc(args.date, args.dir_out)
+    parser_download_chlorophyll_conc.set_defaults(func=download_chlorophyll_conc_handler)
 
     args = parser.parse_args()
     if hasattr(args, 'func'):
