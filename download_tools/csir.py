@@ -7,7 +7,6 @@ def download_phytoplankton_flags(date,output_dir):
     Function to download CSIR phytoplankton flags and save as NetCDF file. CSIR 
     disseminates the data freely using the link below: 
         https://ocims.csir.co.za/data/s3olci/s3-phytoplankton-south_africa
-
     Parameters
     ----------
     date : pandas datetime - datetime.datetime(YYYY,MM,DD)
@@ -16,7 +15,7 @@ def download_phytoplankton_flags(date,output_dir):
         Directory to save downloaded phytoplankton flags to as a NetCDF file.
     """
     # Build file path
-    url = "https://ocims.csir.co.za/data/s3olci/s3-phytoplankton-south_africa"
+    url = "https://ocims.csir.co.za/data/s3olci/s3-phytoplankton-south_africa/"
     file_in = os.path.join(url, f"phyto_south_africa_{date.strftime('%Y%m%d')}.tif" )
     try:
         print(f"\nOpening tif file: {file_in}")
@@ -38,7 +37,7 @@ def download_chlorophyll_conc(date,output_dir):
     """
     Function to download chlorophyll concentration from the Sentinel-3 satellite 
     disseminated by CSIR using the link below: 
-        https://www.ocims.gov.za/data/s3olci/s3-chl-south_africa
+        https://ocims.csir.co.za/data/s3olci/s3-chl-south_africa
     The function writes the data in a NetCDF file.
 
     Parameters

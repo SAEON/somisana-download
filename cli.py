@@ -213,7 +213,7 @@ def main():
     # download_phytoplankton_flags
     # -------------------------
     parser_download_phytoplankton_flags = subparsers.add_parser('download_phytoplankton_flags',
-                        help='Download the daily phytoplankton flags as NetCDF file from CSIR - https://www.ocims.gov.za/data/s3olci/s3-phytoplankton-south_africa ')
+                        help='Download the daily phytoplankton flags as NetCDF file from CSIR - https://ocims.csir.co.za/data/s3olci/s3-phytoplankton-south_africa')
     parser_download_phytoplankton_flags.add_argument('--date', required=True, type=parse_datetime,
                         help='start time in format "YYYY-MM-DD HH:MM:SS"')
     parser_download_phytoplankton_flags.add_argument('--dir_out', required=True, help='Directory to save files') 
@@ -225,7 +225,7 @@ def main():
     # download_chlorophyll_conc
     # -------------------------
     parser_download_chlorophyll_conc = subparsers.add_parser('download_chlorophyll_conc',
-                        help='Download the daily Chlorophyll concentration from the Sentinel-3 Satellite disseminated by CSIR - https://www.ocims.gov.za/data/s3olci/s3-chl-south_africa')
+                        help='Download the daily Chlorophyll concentration from the Sentinel-3 Satellite disseminated by CSIR - https://ocims.csir.co.za/data/s3olci/s3-chl-south_africa/')
     parser_download_chlorophyll_conc.add_argument('--date', required=True, type=parse_datetime,
                         help='start time in format "YYYY-MM-DD HH:MM:SS"')
     parser_download_chlorophyll_conc.add_argument('--dir_out', required=True, help='Directory to save files') 
